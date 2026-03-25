@@ -1,0 +1,35 @@
+{
+  "name": "manchu-visualizer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "generate:fonts": "node scripts/generate-font-manifest.mjs",
+    "predev": "npm run generate:fonts",
+    "dev": "vite",
+    "prebuild": "npm run generate:fonts",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "pretest": "npm run generate:fonts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.19.15",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react-swc": "^3.8.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}
