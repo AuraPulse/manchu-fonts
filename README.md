@@ -33,4 +33,6 @@ npm run build
 2. 不要使用 `Deploy from a branch`
 3. 推送到 `main` 后，等待 `.github/workflows/deploy.yml` 完成
 
+这个仓库把 Vite `base` 设为 `./`，这样同一份构建产物既能跑在 GitHub Pages 项目地址 `/<repo>/` 下，也能跑在自定义域名根路径下。
+
 如果 `Pages` 仍然指向分支根目录，GitHub 会直接服务源码里的 `index.html`，浏览器就会去请求 `./src/main.tsx`，然后出现模块脚本 MIME 报错。
