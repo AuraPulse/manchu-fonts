@@ -352,21 +352,23 @@ def render_tight_content(text: str, font: ImageFont.FreeTypeFont) -> Image.Image
 def render_sample_image(
     text: str,
     font: ImageFont.FreeTypeFont,
+    canvas_width: int,
     canvas_height: int,
     padding_percentage: float,
 ) -> Image.Image:
+    if canvas_width <= 0:
+        raise ValueError("canvas_width must be positive.")
     if canvas_height <= 0:
         raise ValueError("canvas_height must be positive.")
     if not 0 <= padding_percentage < 0.5:
         raise ValueError("padding_percentage must be in [0, 0.5).")
 
     content = render_tight_content(text, font)
-    aspect_ratio = content.width / content.height
-
-    canvas_width = max(1, round(canvas_height * aspect_ratio))
-    inner_height = max(1, round(canvas_height * (1 - padding_percentage * 2)))
-    inner_width = max(1, round(inner_height * aspect_ratio))
-    canvas_width = max(canvas_width, inner_width)
+    max_inner_width = max(1, round(canvas_width * (1 - padding_percentage * 2)))
+    max_inner_height = max(1, round(canvas_height * (1 - padding_percentage * 2)))
+    scale = min(max_inner_width / content.width, max_inner_height / content.height)
+    inner_width = max(1, round(content.width * scale))
+    inner_height = max(1, round(content.height * scale))
 
     resized_inner = content.resize((inner_width, inner_height), RESAMPLE_LANCZOS).convert("RGB")
     padded_image = Image.new("RGB", (canvas_width, canvas_height), "white")
@@ -426,6 +428,7 @@ def write_summary(
     samples: list[DatasetSample],
     invalid_rows: list[InvalidRow],
     seed: int,
+    canvas_width: int,
     canvas_height: int,
     padding_percentage: float,
 ) -> None:
@@ -448,6 +451,7 @@ def write_summary(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "words_file": str(words_file.resolve()),
         "seed": seed,
+        "canvas_width": canvas_width,
         "canvas_height": canvas_height,
         "padding_percentage": padding_percentage,
         "total_samples": len(samples),
@@ -477,6 +481,7 @@ def generate_dataset(
     font_specs: list[FontSpec],
     output_dir: Path,
     seed: int,
+    canvas_width: int,
     canvas_height: int,
     padding_percentage: float,
     skip_invalid: bool,
@@ -535,6 +540,7 @@ def generate_dataset(
             image = render_sample_image(
                 text=sample.row.manchu,
                 font=font_cache[sample.font.id],
+                canvas_width=canvas_width,
                 canvas_height=canvas_height,
                 padding_percentage=padding_percentage,
             )
@@ -570,6 +576,7 @@ def generate_dataset(
         samples=samples,
         invalid_rows=invalid_rows,
         seed=seed,
+        canvas_width=canvas_width,
         canvas_height=canvas_height,
         padding_percentage=padding_percentage,
     )
@@ -596,6 +603,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", required=True, help="Directory where the dataset will be written.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic partitioning.")
+    parser.add_argument(
+        "--canvas-width",
+        type=int,
+        default=480,
+        help="Fixed output image width in pixels.",
+    )
     parser.add_argument(
         "--canvas-height",
         type=int,
@@ -632,6 +645,7 @@ def main() -> int:
         font_specs=font_specs,
         output_dir=output_dir,
         seed=args.seed,
+        canvas_width=args.canvas_width,
         canvas_height=args.canvas_height,
         padding_percentage=args.padding_percentage,
         skip_invalid=args.skip_invalid,
