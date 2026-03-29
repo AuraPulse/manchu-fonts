@@ -54,7 +54,7 @@ dataset/hf-ready/
   summary.json
 ```
 
-`metadata.csv` 的列顺序固定为 `im,roman,manchu`。同时会额外生成 `metadata_hf.csv`，列顺序为 `file_name,roman,manchu`，更适合直接给 Hugging Face `ImageFolder` 使用。默认画布固定为 `480x64`，内容会在画布内部按 `padding_percentage` 等比缩放并居中。
+`metadata.csv` 的列顺序固定为 `im,roman,manchu`。同时会额外生成 `metadata_hf.csv`，列顺序为 `file_name,roman,manchu`，更适合直接给 Hugging Face `ImageFolder` 使用。默认画布固定为 `480x64`，内容会等比缩放后左对齐放置，并在垂直方向居中。
 
 ## GitHub Pages
 

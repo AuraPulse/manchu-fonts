@@ -62,7 +62,7 @@ class PartitioningTests(unittest.TestCase):
 
 
 class RenderingTests(unittest.TestCase):
-    def test_rendered_image_has_fixed_canvas_and_center_padding(self) -> None:
+    def test_rendered_image_has_fixed_canvas_left_padding_and_vertical_padding(self) -> None:
         font_path = ROOT_DIR / "manchufonts" / "XM_ShuKai.ttf"
         font = ImageFont.truetype(str(font_path), MODULE.PROBE_FONT_SIZE)
 
@@ -79,10 +79,14 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(image.height, 64)
         self.assertIsNotNone(non_white_box)
         assert non_white_box is not None
-        self.assertGreaterEqual(non_white_box[0], 24)
-        self.assertLessEqual(non_white_box[2], 456)
-        self.assertGreaterEqual(non_white_box[1], 3)
-        self.assertLessEqual(non_white_box[3], 61)
+        self.assertGreaterEqual(non_white_box[0], 4)
+        self.assertGreater(non_white_box[2], 0)
+        self.assertLess(non_white_box[2], 480)
+        top_padding = non_white_box[1]
+        bottom_padding = image.height - non_white_box[3]
+        self.assertGreaterEqual(top_padding, 4)
+        self.assertGreaterEqual(bottom_padding, 4)
+        self.assertLessEqual(abs(top_padding - bottom_padding), 1)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 import re
 from collections import defaultdict
@@ -364,20 +365,23 @@ def render_sample_image(
         raise ValueError("padding_percentage must be in [0, 0.5).")
 
     content = render_tight_content(text, font)
-    max_inner_width = max(1, round(canvas_width * (1 - padding_percentage * 2)))
-    max_inner_height = max(1, round(canvas_height * (1 - padding_percentage * 2)))
-    scale = min(max_inner_width / content.width, max_inner_height / content.height)
-    inner_width = max(1, round(content.width * scale))
-    inner_height = max(1, round(content.height * scale))
+    left_padding = math.ceil(canvas_width * padding_percentage)
+    top_padding = math.ceil(canvas_height * padding_percentage)
+    bottom_padding = math.ceil(canvas_height * padding_percentage)
+    inner_width = max(1, canvas_width - left_padding)
+    inner_height = max(1, canvas_height - top_padding - bottom_padding)
+    scale = min(inner_width / content.width, inner_height / content.height)
+    scaled_width = max(1, min(inner_width, math.floor(content.width * scale)))
+    scaled_height = max(1, min(inner_height, math.floor(content.height * scale)))
 
-    resized_inner = content.resize((inner_width, inner_height), RESAMPLE_LANCZOS).convert("RGB")
-    padded_image = Image.new("RGB", (canvas_width, canvas_height), "white")
+    resized_inner = content.resize((scaled_width, scaled_height), RESAMPLE_LANCZOS).convert("RGB")
+    canvas = Image.new("RGB", (canvas_width, canvas_height), "white")
 
-    padding_x = round((canvas_width - inner_width) / 2)
-    padding_y = round((canvas_height - inner_height) / 2)
-    padded_image.paste(resized_inner, (padding_x, padding_y))
+    x_offset = left_padding
+    y_offset = top_padding + max(0, (inner_height - scaled_height) // 2)
+    canvas.paste(resized_inner, (x_offset, y_offset))
 
-    return padded_image
+    return canvas
 
 
 def build_samples(buckets: list[tuple[FontSpec, list[ConvertedRow]]]) -> list[DatasetSample]:
