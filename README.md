@@ -25,6 +25,35 @@ npm run build
 
 构建输出位于 `dist/`。
 
+## Dataset Generation
+
+可以直接把 `AllWords.txt` 生成为 Hugging Face 风格的词图数据集：
+
+```bash
+python3 scripts/generate_manchu_hf_dataset.py \
+  --words-file AllWords.txt \
+  --fonts XM_ShuKai.ttf "Sungar PaKa.ttf" \
+  --output-dir dataset/hf-ready \
+  --seed 42
+```
+
+输出结构如下：
+
+```text
+dataset/hf-ready/
+  train/
+    images/<font_id>/*.png
+    metadata.csv
+    metadata_hf.csv
+  validation/
+    images/<font_id>/*.png
+    metadata.csv
+    metadata_hf.csv
+  summary.json
+```
+
+`metadata.csv` 的列顺序固定为 `im,roman,manchu`。同时会额外生成 `metadata_hf.csv`，列顺序为 `file_name,roman,manchu`，更适合直接给 Hugging Face `ImageFolder` 使用。
+
 ## GitHub Pages
 
 这个仓库使用 GitHub Actions 部署到 GitHub Pages。
