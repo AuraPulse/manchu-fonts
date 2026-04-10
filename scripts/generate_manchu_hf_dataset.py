@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import numpy as np
 import random
 import re
 from collections import defaultdict
@@ -118,6 +119,68 @@ class DatasetSample:
     partition_index: int
     font: FontSpec
     row: ConvertedRow
+
+
+@dataclass(frozen=True)
+class StrokeAugmentationConfig:
+    enabled: bool = False
+    threshold: int = 220
+    pixel_dropout_apply_prob: float = 0.0
+    pixel_dropout_ratio_min: float = 0.01
+    pixel_dropout_ratio_max: float = 0.03
+    patch_dropout_apply_prob: float = 0.0
+    patch_count_min: int = 1
+    patch_count_max: int = 3
+    patch_size_min: int = 2
+    patch_size_max: int = 6
+    patch_shape: str = "rectangle"
+
+
+def get_augmentation_preset(name: str) -> StrokeAugmentationConfig:
+    presets = {
+        "light": StrokeAugmentationConfig(
+            enabled=True,
+            threshold=220,
+            pixel_dropout_apply_prob=0.45,
+            pixel_dropout_ratio_min=0.006,
+            pixel_dropout_ratio_max=0.018,
+            patch_dropout_apply_prob=0.35,
+            patch_count_min=1,
+            patch_count_max=2,
+            patch_size_min=2,
+            patch_size_max=4,
+            patch_shape="circle",
+        ),
+        "medium": StrokeAugmentationConfig(
+            enabled=True,
+            threshold=220,
+            pixel_dropout_apply_prob=0.65,
+            pixel_dropout_ratio_min=0.01,
+            pixel_dropout_ratio_max=0.03,
+            patch_dropout_apply_prob=0.65,
+            patch_count_min=1,
+            patch_count_max=3,
+            patch_size_min=2,
+            patch_size_max=6,
+            patch_shape="mixed",
+        ),
+        "heavy": StrokeAugmentationConfig(
+            enabled=True,
+            threshold=220,
+            pixel_dropout_apply_prob=0.9,
+            pixel_dropout_ratio_min=0.02,
+            pixel_dropout_ratio_max=0.06,
+            patch_dropout_apply_prob=0.9,
+            patch_count_min=3,
+            patch_count_max=6,
+            patch_size_min=3,
+            patch_size_max=9,
+            patch_shape="mixed",
+        ),
+    }
+    if name not in presets:
+        raise ValueError(f"Unknown augmentation preset: {name}")
+    return presets[name]
 
 
 def slugify(value: str) -> str:
@@ -325,6 +388,131 @@ def split_bucket(rows: list[ConvertedRow], train_ratio: float = 0.9) -> tuple[li
     return rows[:train_count], rows[train_count:]
 
 
+def get_stroke_mask(image: Image.Image, threshold: int) -> np.ndarray:
+    grayscale = np.asarray(image.convert("L"))
+    return grayscale < threshold
+
+
+def augment_stroke_pixel_dropout(
+    image: Image.Image,
+    rng: random.Random,
+    drop_ratio: float,
+    threshold: int,
+) -> Image.Image:
+    if drop_ratio <= 0:
+        return image
+
+    grayscale = np.asarray(image.convert("L")).copy()
+    stroke_mask = get_stroke_mask(image, threshold)
+    stroke_coords = np.argwhere(stroke_mask)
+
+    if len(stroke_coords) == 0:
+        return image
+
+    drop_count = min(len(stroke_coords), max(1, int(len(stroke_coords) * drop_ratio)))
+    np_rng = np.random.default_rng(rng.randrange(1 << 63))
+    drop_indices = np_rng.choice(len(stroke_coords), size=drop_count, replace=False)
+    drop_coords = stroke_coords[drop_indices]
+    grayscale[drop_coords[:, 0], drop_coords[:, 1]] = 255
+    return Image.fromarray(grayscale, mode="L").convert("RGB")
+
+
+def augment_stroke_patch_dropout(
+    image: Image.Image,
+    rng: random.Random,
+    patch_count: int,
+    patch_size_min: int,
+    patch_size_max: int,
+    threshold: int,
+    patch_shape: str,
+) -> Image.Image:
+    if patch_count <= 0:
+        return image
+
+    grayscale = np.asarray(image.convert("L")).copy()
+    stroke_mask = get_stroke_mask(image, threshold)
+    stroke_coords = np.argwhere(stroke_mask)
+
+    if len(stroke_coords) == 0:
+        return image
+
+    np_rng = np.random.default_rng(rng.randrange(1 << 63))
+
+    for _ in range(patch_count):
+        center_y, center_x = stroke_coords[np_rng.integers(0, len(stroke_coords))]
+        current_shape = patch_shape if patch_shape != "mixed" else rng.choice(["rectangle", "circle"])
+        patch_height = rng.randint(patch_size_min, patch_size_max)
+        patch_width = rng.randint(patch_size_min, patch_size_max)
+        y0 = max(0, center_y - patch_height // 2)
+        x0 = max(0, center_x - patch_width // 2)
+        y1 = min(grayscale.shape[0], y0 + patch_height)
+        x1 = min(grayscale.shape[1], x0 + patch_width)
+
+        local_stroke_mask = stroke_mask[y0:y1, x0:x1]
+        if current_shape == "rectangle":
+            grayscale[y0:y1, x0:x1][local_stroke_mask] = 255
+            continue
+
+        local_height = y1 - y0
+        local_width = x1 - x0
+        yy, xx = np.ogrid[:local_height, :local_width]
+        center_yy = (local_height - 1) / 2.0
+        center_xx = (local_width - 1) / 2.0
+        radius_y = max(local_height / 2.0, 1.0)
+        radius_x = max(local_width / 2.0, 1.0)
+        ellipse_mask = (((yy - center_yy) / radius_y) ** 2 + ((xx - center_xx) / radius_x) ** 2) <= 1.0
+        grayscale[y0:y1, x0:x1][local_stroke_mask & ellipse_mask] = 255
+
+    return Image.fromarray(grayscale, mode="L").convert("RGB")
+
+
+def apply_stroke_augmentations(
+    image: Image.Image,
+    config: StrokeAugmentationConfig,
+    rng: random.Random,
+) -> Image.Image:
+    if not config.enabled:
+        return image
+
+    if not 0 <= config.pixel_dropout_apply_prob <= 1:
+        raise ValueError("pixel_dropout_apply_prob must be in [0, 1].")
+    if not 0 <= config.patch_dropout_apply_prob <= 1:
+        raise ValueError("patch_dropout_apply_prob must be in [0, 1].")
+    if config.pixel_dropout_ratio_min > config.pixel_dropout_ratio_max:
+        raise ValueError("pixel_dropout_ratio_min must be <= pixel_dropout_ratio_max.")
+    if config.patch_count_min > config.patch_count_max:
+        raise ValueError("patch_count_min must be <= patch_count_max.")
+    if config.patch_size_min > config.patch_size_max:
+        raise ValueError("patch_size_min must be <= patch_size_max.")
+    if config.patch_shape not in {"rectangle", "circle", "mixed"}:
+        raise ValueError("patch_shape must be one of: rectangle, circle, mixed.")
+
+    augmented = image
+
+    if rng.random() < config.pixel_dropout_apply_prob:
+        drop_ratio = rng.uniform(config.pixel_dropout_ratio_min, config.pixel_dropout_ratio_max)
+        augmented = augment_stroke_pixel_dropout(
+            augmented,
+            rng=rng,
+            drop_ratio=drop_ratio,
+            threshold=config.threshold,
+        )
+
+    if rng.random() < config.patch_dropout_apply_prob:
+        patch_count = rng.randint(config.patch_count_min, config.patch_count_max)
+        augmented = augment_stroke_patch_dropout(
+            augmented,
+            rng=rng,
+            patch_count=patch_count,
+            patch_size_min=config.patch_size_min,
+            patch_size_max=config.patch_size_max,
+            threshold=config.threshold,
+            patch_shape=config.patch_shape,
+        )
+
+    return augmented
+
+
 def render_tight_content(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
     bbox = font.getbbox(text)
     if bbox is None:
@@ -435,6 +623,8 @@ def write_summary(
     canvas_width: int,
     canvas_height: int,
     padding_percentage: float,
+    max_samples: int | None,
+    augmentation_config: StrokeAugmentationConfig,
 ) -> None:
     split_counts = defaultdict(int)
     per_font_counts: dict[str, dict[str, int | str]] = {
@@ -458,8 +648,22 @@ def write_summary(
         "canvas_width": canvas_width,
         "canvas_height": canvas_height,
         "padding_percentage": padding_percentage,
+        "max_samples": max_samples,
         "total_samples": len(samples),
         "invalid_samples": len(invalid_rows),
+        "stroke_augmentation": {
+            "enabled": augmentation_config.enabled,
+            "threshold": augmentation_config.threshold,
+            "pixel_dropout_apply_prob": augmentation_config.pixel_dropout_apply_prob,
+            "pixel_dropout_ratio_min": augmentation_config.pixel_dropout_ratio_min,
+            "pixel_dropout_ratio_max": augmentation_config.pixel_dropout_ratio_max,
+            "patch_dropout_apply_prob": augmentation_config.patch_dropout_apply_prob,
+            "patch_count_min": augmentation_config.patch_count_min,
+            "patch_count_max": augmentation_config.patch_count_max,
+            "patch_size_min": augmentation_config.patch_size_min,
+            "patch_size_max": augmentation_config.patch_size_max,
+            "patch_shape": augmentation_config.patch_shape,
+        },
         "splits": {
             "train": split_counts["train"],
             "validation": split_counts["validation"],
@@ -489,9 +693,17 @@ def generate_dataset(
     canvas_height: int,
     padding_percentage: float,
     skip_invalid: bool,
+    max_samples: int | None = None,
+    augmentation_config: StrokeAugmentationConfig = StrokeAugmentationConfig(),
 ) -> dict[str, int]:
     source_rows = read_source_rows(words_file)
     converted_rows, invalid_rows = convert_rows(source_rows, skip_invalid=skip_invalid)
+    if max_samples is not None:
+        if max_samples <= 0:
+            raise ValueError("max_samples must be positive when provided.")
+        limited_rows = list(converted_rows)
+        random.Random(seed).shuffle(limited_rows)
+        converted_rows = limited_rows[:max_samples]
     buckets = partition_rows(converted_rows, font_specs, seed=seed)
     samples = build_samples(buckets)
 
@@ -511,6 +723,7 @@ def generate_dataset(
 
     metadata_handles: dict[str, object] = {}
     metadata_writers: dict[str, dict[str, csv.writer]] = {}
+    augmentation_rng = random.Random(seed ^ 0x5F3759DF)
 
     try:
         for split_name, split_dir in split_dirs.items():
@@ -548,6 +761,11 @@ def generate_dataset(
                 canvas_height=canvas_height,
                 padding_percentage=padding_percentage,
             )
+            image = apply_stroke_augmentations(
+                image,
+                config=augmentation_config,
+                rng=random.Random(augmentation_rng.randrange(1 << 63)),
+            )
             image.save(image_path, format="PNG")
 
             image_relpath = image_path.relative_to(split_dir).as_posix()
@@ -583,6 +801,8 @@ def generate_dataset(
         canvas_width=canvas_width,
         canvas_height=canvas_height,
         padding_percentage=padding_percentage,
+        max_samples=max_samples,
+        augmentation_config=augmentation_config,
     )
 
     return {
@@ -630,6 +850,83 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip rows that contain unsupported Roman fragments and write invalid_rows.csv.",
     )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Limit generation to a deterministic subset of this many valid rows.",
+    )
+    parser.add_argument(
+        "--enable-stroke-augmentation",
+        action="store_true",
+        help="Enable stroke pixel dropout and stroke patch dropout.",
+    )
+    parser.add_argument(
+        "--augment-preset",
+        choices=["light", "medium", "heavy"],
+        default=None,
+        help="Apply a predefined stroke augmentation preset. Explicit flags can still override it.",
+    )
+    parser.add_argument(
+        "--stroke-threshold",
+        type=int,
+        default=220,
+        help="Stroke threshold used to detect foreground pixels for augmentation.",
+    )
+    parser.add_argument(
+        "--pixel-dropout-apply-prob",
+        type=float,
+        default=0.65,
+        help="Probability of applying pixel-level stroke dropout to a sample.",
+    )
+    parser.add_argument(
+        "--pixel-dropout-ratio-min",
+        type=float,
+        default=0.01,
+        help="Minimum fraction of stroke pixels to erase when pixel dropout is applied.",
+    )
+    parser.add_argument(
+        "--pixel-dropout-ratio-max",
+        type=float,
+        default=0.035,
+        help="Maximum fraction of stroke pixels to erase when pixel dropout is applied.",
+    )
+    parser.add_argument(
+        "--patch-dropout-apply-prob",
+        type=float,
+        default=0.8,
+        help="Probability of applying patch-level stroke dropout to a sample.",
+    )
+    parser.add_argument(
+        "--patch-count-min",
+        type=int,
+        default=1,
+        help="Minimum number of stroke patches to drop when patch dropout is applied.",
+    )
+    parser.add_argument(
+        "--patch-count-max",
+        type=int,
+        default=4,
+        help="Maximum number of stroke patches to drop when patch dropout is applied.",
+    )
+    parser.add_argument(
+        "--patch-size-min",
+        type=int,
+        default=2,
+        help="Minimum side length of a dropped stroke patch.",
+    )
+    parser.add_argument(
+        "--patch-size-max",
+        type=int,
+        default=8,
+        help="Maximum side length of a dropped stroke patch.",
+    )
+    parser.add_argument(
+        "--patch-shape",
+        choices=["rectangle", "circle", "mixed"],
+        default="rectangle",
+        help="Shape used for stroke patch dropout.",
+    )
     return parser.parse_args()
 
 
@@ -643,6 +940,28 @@ def main() -> int:
         raise FileNotFoundError(f"Words file not found: {words_file}")
 
     font_specs = resolve_font_specs(args.fonts, root_dir=root_dir)
+    preset_config = get_augmentation_preset(args.augment_preset) if args.augment_preset else None
+    augmentation_config = StrokeAugmentationConfig(
+        enabled=args.enable_stroke_augmentation or preset_config is not None,
+        threshold=preset_config.threshold if preset_config else args.stroke_threshold,
+        pixel_dropout_apply_prob=(
+            preset_config.pixel_dropout_apply_prob if preset_config else args.pixel_dropout_apply_prob
+        ),
+        pixel_dropout_ratio_min=(
+            preset_config.pixel_dropout_ratio_min if preset_config else args.pixel_dropout_ratio_min
+        ),
+        pixel_dropout_ratio_max=(
+            preset_config.pixel_dropout_ratio_max if preset_config else args.pixel_dropout_ratio_max
+        ),
+        patch_dropout_apply_prob=(
+            preset_config.patch_dropout_apply_prob if preset_config else args.patch_dropout_apply_prob
+        ),
+        patch_count_min=preset_config.patch_count_min if preset_config else args.patch_count_min,
+        patch_count_max=preset_config.patch_count_max if preset_config else args.patch_count_max,
+        patch_size_min=preset_config.patch_size_min if preset_config else args.patch_size_min,
+        patch_size_max=preset_config.patch_size_max if preset_config else args.patch_size_max,
+        patch_shape=preset_config.patch_shape if preset_config else args.patch_shape,
+    )
 
     stats = generate_dataset(
         words_file=words_file,
@@ -653,6 +972,8 @@ def main() -> int:
         canvas_height=args.canvas_height,
         padding_percentage=args.padding_percentage,
         skip_invalid=args.skip_invalid,
+        max_samples=args.max_samples,
+        augmentation_config=augmentation_config,
     )
 
     print(

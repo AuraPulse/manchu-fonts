@@ -148,6 +148,7 @@ export function ManchuPreview({
             </div>
           </article>
         ) : null}
+
       </div>
     </section>
   );

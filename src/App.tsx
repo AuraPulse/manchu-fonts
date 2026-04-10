@@ -1,7 +1,15 @@
 import { useDeferredValue, useEffect, useRef, useState } from 'react';
+import { AugmentedDatasetPreview } from './components/AugmentedDatasetPreview';
 import { ManchuPreview } from './components/ManchuPreview';
 import { MixedFontPreview, type MixedPreviewItem } from './components/MixedFontPreview';
 import { FONT_OPTIONS } from './generated/fontManifest';
+import {
+  cloneAugmentationConfig,
+  getAugmentationPreset,
+  type AugmentPreset,
+  type PatchShape,
+  type StrokeAugmentationConfig,
+} from './lib/augmentation';
 import { copyUnicodeText } from './lib/clipboard';
 import { ensureFontFaces } from './lib/fonts';
 import { exportPreviewAsPdf, exportPreviewAsPng } from './lib/export';
@@ -10,10 +18,12 @@ import { buildPreviewSegments, normalizeRoman, romanToManchu } from './lib/manch
 const DEFAULT_INPUT = 'manju gisun\nabkai';
 const DEFAULT_PAGE = 'single';
 const DEFAULT_MIXED_INPUT = 'manju';
+const DEFAULT_AUGMENT_PRESET: AugmentPreset = 'medium';
 
 const PAGE_OPTIONS = [
   { id: 'single', label: 'Single Preview' },
   { id: 'mixed', label: 'Mixed Fonts' },
+  { id: 'augmentation', label: 'Augmentation' },
 ] as const;
 
 type PageId = (typeof PAGE_OPTIONS)[number]['id'];
@@ -31,7 +41,7 @@ type ExportState =
   | 'failed';
 
 const getPageFromHash = (hash: string): PageId =>
-  hash === '#mixed' ? 'mixed' : DEFAULT_PAGE;
+  hash === '#mixed' ? 'mixed' : hash === '#augmentation' ? 'augmentation' : DEFAULT_PAGE;
 
 const toSafeFileStem = (value: string, fallback: string) => {
   const stem = value
@@ -55,6 +65,12 @@ function App() {
   const [columnGap, setColumnGap] = useState(1.75);
   const [showHorizontalDebug, setShowHorizontalDebug] = useState(true);
   const [showUnicodeText, setShowUnicodeText] = useState(true);
+  const [augmentationPreset, setAugmentationPreset] = useState<AugmentPreset | 'custom'>(DEFAULT_AUGMENT_PRESET);
+  const [augmentationConfig, setAugmentationConfig] = useState<StrokeAugmentationConfig>(() => ({
+    ...getAugmentationPreset(DEFAULT_AUGMENT_PRESET),
+    patchShape: 'circle',
+  }));
+  const [augmentationSeed, setAugmentationSeed] = useState(42);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [exportState, setExportState] = useState<ExportState>('idle');
   const singleVerticalPreviewRef = useRef<HTMLDivElement>(null);
@@ -102,8 +118,30 @@ function App() {
       segments: buildPreviewSegments(mixedQuery),
     }));
 
+  const updateAugmentationConfig = (updater: (current: StrokeAugmentationConfig) => StrokeAugmentationConfig) => {
+    setAugmentationPreset('custom');
+    setAugmentationConfig((current) => updater(cloneAugmentationConfig(current)));
+  };
+
+  const applyAugmentationPreset = (nextPreset: AugmentPreset | 'custom') => {
+    setAugmentationPreset(nextPreset);
+    if (nextPreset === 'custom') {
+      return;
+    }
+
+    setAugmentationConfig((current) => ({
+      ...getAugmentationPreset(nextPreset),
+      patchShape: current.patchShape,
+    }));
+  };
+
   const navigateToPage = (page: PageId) => {
-    window.location.hash = page === 'mixed' ? 'mixed' : 'single';
+    window.location.hash =
+      page === 'mixed'
+        ? 'mixed'
+        : page === 'augmentation'
+          ? 'augmentation'
+          : 'single';
     setActivePage(page);
   };
 
@@ -280,6 +318,7 @@ function App() {
             />
             <span>Show Unicode output</span>
           </label>
+
         </section>
 
         {showUnicodeText ? (
@@ -518,6 +557,368 @@ function App() {
     </>
   );
 
+  const renderAugmentationPage = () => (
+    <>
+      <div className="sidebar">
+        <section className="panel panel--input">
+          <div className="panel__header">
+            <div>
+              <p className="eyebrow">Input</p>
+              <h2>Augmentation Input</h2>
+            </div>
+            <span className="status-badge">{errors.length === 0 ? 'Ready' : `${errors.length} unresolved`}</span>
+          </div>
+
+          <label className="field">
+            <span className="field__label">Roman text</span>
+            <textarea
+              aria-label="Augmentation Roman input"
+              className="roman-input"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Example: manju gisun"
+              rows={5}
+            />
+          </label>
+
+          <div className="info-grid">
+            <article className="info-card">
+              <p className="info-card__label">Normalized</p>
+              <p className="info-card__value">{normalized || '—'}</p>
+            </article>
+            <article className="info-card">
+              <p className="info-card__label">Unicode</p>
+              <p className="info-card__value">{manchuText || '—'}</p>
+            </article>
+          </div>
+        </section>
+
+        <section className="panel panel--controls">
+          <div className="panel__header">
+            <div>
+              <p className="eyebrow">Controls</p>
+              <h2>Augmentation Settings</h2>
+            </div>
+          </div>
+
+          <label className="field">
+            <span className="field__label">Font</span>
+            <select
+              aria-label="Augmentation font selector"
+              className="select-field"
+              value={fontId}
+              onChange={(event) => setFontId(event.target.value)}
+            >
+              {FONT_OPTIONS.map((font) => (
+                <option key={font.id} value={font.id}>
+                  {font.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span className="field__label">Preset</span>
+            <select
+              aria-label="Augmentation preset"
+              className="select-field"
+              value={augmentationPreset}
+              onChange={(event) => applyAugmentationPreset(event.target.value as AugmentPreset | 'custom')}
+            >
+              <option value="off">Off</option>
+              <option value="light">Light</option>
+              <option value="medium">Medium</option>
+              <option value="heavy">Heavy</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span className="field__label">Variation seed</span>
+            <input
+              aria-label="Augmentation seed"
+              className="select-field"
+              type="number"
+              value={augmentationSeed}
+              onChange={(event) => setAugmentationSeed(Number(event.target.value) || 0)}
+            />
+          </label>
+
+          <div className="field-group">
+            <p className="field__label">Dataset augmentation</p>
+
+            <div className="augmentation-card-grid">
+              <section className="augmentation-card">
+                <div className="augmentation-card__header">
+                  <div>
+                    <p className="eyebrow">Dropout</p>
+                    <h3>Stroke Pixel</h3>
+                  </div>
+                  <label className="toggle toggle--compact">
+                    <input
+                      aria-label="Enable stroke pixel dropout"
+                      type="checkbox"
+                      checked={augmentationConfig.pixelDropoutApplyProb > 0}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          enabled: event.target.checked || current.patchDropoutApplyProb > 0,
+                          pixelDropoutApplyProb: event.target.checked ? Math.max(current.pixelDropoutApplyProb, 0.45) : 0,
+                        }))
+                      }
+                    />
+                    <span>Enable</span>
+                  </label>
+                </div>
+
+                <label className="field field--compact">
+                  <span className="field__label">
+                    Apply probability: {(augmentationConfig.pixelDropoutApplyProb * 100).toFixed(0)}%
+                  </span>
+                  <input
+                    aria-label="Stroke pixel apply probability"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={augmentationConfig.pixelDropoutApplyProb}
+                    onChange={(event) =>
+                      updateAugmentationConfig((current) => ({
+                        ...current,
+                        enabled: Number(event.target.value) > 0 || current.patchDropoutApplyProb > 0,
+                        pixelDropoutApplyProb: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+
+                <div className="info-grid info-grid--compact">
+                  <label className="field field--compact">
+                    <span className="field__label">
+                      Ratio min: {(augmentationConfig.pixelDropoutRatioMin * 100).toFixed(1)}%
+                    </span>
+                    <input
+                      aria-label="Stroke pixel ratio min"
+                      type="range"
+                      min="0"
+                      max="0.1"
+                      step="0.001"
+                      value={augmentationConfig.pixelDropoutRatioMin}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          pixelDropoutRatioMin: Math.min(Number(event.target.value), current.pixelDropoutRatioMax),
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="field field--compact">
+                    <span className="field__label">
+                      Ratio max: {(augmentationConfig.pixelDropoutRatioMax * 100).toFixed(1)}%
+                    </span>
+                    <input
+                      aria-label="Stroke pixel ratio max"
+                      type="range"
+                      min="0"
+                      max="0.12"
+                      step="0.001"
+                      value={augmentationConfig.pixelDropoutRatioMax}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          pixelDropoutRatioMax: Math.max(Number(event.target.value), current.pixelDropoutRatioMin),
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="augmentation-card">
+                <div className="augmentation-card__header">
+                  <div>
+                    <p className="eyebrow">Dropout</p>
+                    <h3>Stroke Patch</h3>
+                  </div>
+                  <label className="toggle toggle--compact">
+                    <input
+                      aria-label="Enable stroke patch dropout"
+                      type="checkbox"
+                      checked={augmentationConfig.patchDropoutApplyProb > 0}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          enabled: current.pixelDropoutApplyProb > 0 || event.target.checked,
+                          patchDropoutApplyProb: event.target.checked ? Math.max(current.patchDropoutApplyProb, 0.45) : 0,
+                        }))
+                      }
+                    />
+                    <span>Enable</span>
+                  </label>
+                </div>
+
+                <label className="field field--compact">
+                  <span className="field__label">
+                    Apply probability: {(augmentationConfig.patchDropoutApplyProb * 100).toFixed(0)}%
+                  </span>
+                  <input
+                    aria-label="Stroke patch apply probability"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={augmentationConfig.patchDropoutApplyProb}
+                    onChange={(event) =>
+                      updateAugmentationConfig((current) => ({
+                        ...current,
+                        enabled: current.pixelDropoutApplyProb > 0 || Number(event.target.value) > 0,
+                        patchDropoutApplyProb: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="field field--compact">
+                  <span className="field__label">Patch shape</span>
+                  <select
+                    aria-label="Stroke patch shape"
+                    className="select-field"
+                    value={augmentationConfig.patchShape}
+                    onChange={(event) =>
+                      updateAugmentationConfig((current) => ({
+                        ...current,
+                        patchShape: event.target.value as PatchShape,
+                      }))
+                    }
+                  >
+                    <option value="rectangle">Rectangle</option>
+                    <option value="circle">Circle</option>
+                    <option value="mixed">Mixed</option>
+                  </select>
+                </label>
+
+                <div className="info-grid info-grid--compact">
+                  <label className="field field--compact">
+                    <span className="field__label">Count min: {augmentationConfig.patchCountMin}</span>
+                    <input
+                      aria-label="Stroke patch count min"
+                      type="range"
+                      min="1"
+                      max="8"
+                      step="1"
+                      value={augmentationConfig.patchCountMin}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          patchCountMin: Math.min(Number(event.target.value), current.patchCountMax),
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="field field--compact">
+                    <span className="field__label">Count max: {augmentationConfig.patchCountMax}</span>
+                    <input
+                      aria-label="Stroke patch count max"
+                      type="range"
+                      min="1"
+                      max="10"
+                      step="1"
+                      value={augmentationConfig.patchCountMax}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          patchCountMax: Math.max(Number(event.target.value), current.patchCountMin),
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="field field--compact">
+                    <span className="field__label">Size min: {augmentationConfig.patchSizeMin}px</span>
+                    <input
+                      aria-label="Stroke patch size min"
+                      type="range"
+                      min="1"
+                      max="12"
+                      step="1"
+                      value={augmentationConfig.patchSizeMin}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          patchSizeMin: Math.min(Number(event.target.value), current.patchSizeMax),
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="field field--compact">
+                    <span className="field__label">Size max: {augmentationConfig.patchSizeMax}px</span>
+                    <input
+                      aria-label="Stroke patch size max"
+                      type="range"
+                      min="1"
+                      max="16"
+                      step="1"
+                      value={augmentationConfig.patchSizeMax}
+                      onChange={(event) =>
+                        updateAugmentationConfig((current) => ({
+                          ...current,
+                          patchSizeMax: Math.max(Number(event.target.value), current.patchSizeMin),
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="preview-card" aria-label="Augmentation preview area">
+        <div className="preview-card__header">
+          <div>
+            <p className="eyebrow">Preview</p>
+            <h2>Augmentation</h2>
+          </div>
+          <div className="preview-card__meta">
+            <p className="font-meta">
+              {FONT_OPTIONS.find((font) => font.id === fontId)?.label ?? 'Font'}
+            </p>
+            <span className="status-badge">
+              {augmentationPreset === 'custom' ? 'Custom augmentation' : `Preset ${augmentationPreset}`}
+            </span>
+          </div>
+        </div>
+
+        <div className="preview-grid">
+          <section className="preview-panel preview-panel--dataset">
+            <div className="preview-panel__header">
+              <div className="preview-panel__title">
+                <h3>Dataset Preview</h3>
+                <span>Realtime 480 x 64 augmentation output</span>
+              </div>
+            </div>
+
+            <AugmentedDatasetPreview
+              text={manchuText}
+              fontId={fontId}
+              seed={augmentationSeed}
+              config={augmentationConfig}
+              presetLabel={
+                augmentationPreset === 'custom'
+                  ? 'Custom augmentation'
+                  : `Preset ${augmentationPreset}`
+              }
+            />
+          </section>
+        </div>
+      </section>
+    </>
+  );
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -540,7 +941,11 @@ function App() {
       </header>
 
       <main className="layout">
-        {activePage === 'single' ? renderSinglePreviewPage() : renderMixedPage()}
+        {activePage === 'single'
+          ? renderSinglePreviewPage()
+          : activePage === 'mixed'
+            ? renderMixedPage()
+            : renderAugmentationPage()}
       </main>
 
       <p className="export-status" role="status" aria-live="polite">

@@ -138,4 +138,17 @@ describe('App', () => {
     expect(screen.getByText('All Fonts Preview')).toBeInTheDocument();
     expect(screen.queryByText('Roman Input')).not.toBeInTheDocument();
   });
+
+  it('shows augmentation page as a separate navigation target', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Augmentation' }));
+
+    expect(screen.getByText('Augmentation Input')).toBeInTheDocument();
+    expect(screen.getByText('Augmentation Settings')).toBeInTheDocument();
+    expect(screen.getByText('Stroke Pixel')).toBeInTheDocument();
+    expect(screen.getByText('Stroke Patch')).toBeInTheDocument();
+    expect(screen.queryByText('All Fonts Preview')).not.toBeInTheDocument();
+  });
 });

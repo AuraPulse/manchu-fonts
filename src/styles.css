@@ -156,6 +156,47 @@ textarea {
   margin-bottom: 0;
 }
 
+.field-group {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(83, 54, 28, 0.12);
+}
+
+.augmentation-card-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.augmentation-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(120, 92, 51, 0.08);
+}
+
+.augmentation-card__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.augmentation-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.toggle--compact {
+  margin: 0;
+}
+
+.info-grid--compact {
+  gap: 10px;
+}
+
 .field__label {
   font-size: 0.95rem;
   color: rgba(33, 25, 19, 0.75);
@@ -377,6 +418,41 @@ input[type="range"] {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
   align-items: stretch;
+}
+
+.preview-panel--dataset {
+  grid-column: 1 / -1;
+}
+
+.dataset-preview-frame {
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(57, 36, 20, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 254, 249, 0.9), rgba(246, 239, 226, 0.9)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(121, 90, 51, 0.06) 0,
+      rgba(121, 90, 51, 0.06) 1px,
+      transparent 1px,
+      transparent 54px
+    );
+  padding: 16px;
+}
+
+.dataset-preview-canvas {
+  display: block;
+  width: min(100%, 480px);
+  max-width: 100%;
+  height: auto;
+  background: #ffffff;
+  border: 1px solid rgba(57, 36, 20, 0.08);
+}
+
+.dataset-preview-caption {
+  margin: 12px 0 0;
+  color: rgba(33, 25, 19, 0.68);
+  font-size: 0.9rem;
 }
 
 .preview-segment {

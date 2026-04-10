@@ -88,6 +88,74 @@ class RenderingTests(unittest.TestCase):
         self.assertGreaterEqual(bottom_padding, 4)
         self.assertLessEqual(abs(top_padding - bottom_padding), 1)
 
+    def test_stroke_augmentation_erases_some_foreground_pixels_deterministically(self) -> None:
+        font_path = ROOT_DIR / "manchufonts" / "XM_ShuKai.ttf"
+        font = ImageFont.truetype(str(font_path), MODULE.PROBE_FONT_SIZE)
+
+        image = MODULE.render_sample_image(
+            "ᠮᠠᠨᠵᡠ",
+            font,
+            canvas_width=480,
+            canvas_height=64,
+            padding_percentage=0.05,
+        )
+        baseline_mask = MODULE.get_stroke_mask(image, threshold=220)
+
+        augmented = MODULE.apply_stroke_augmentations(
+            image,
+            config=MODULE.StrokeAugmentationConfig(
+                enabled=True,
+                threshold=220,
+                pixel_dropout_apply_prob=1.0,
+                pixel_dropout_ratio_min=0.05,
+                pixel_dropout_ratio_max=0.05,
+                patch_dropout_apply_prob=1.0,
+                patch_count_min=2,
+                patch_count_max=2,
+                patch_size_min=3,
+                patch_size_max=3,
+                patch_shape="circle",
+            ),
+            rng=MODULE.random.Random(7),
+        )
+        augmented_mask = MODULE.get_stroke_mask(augmented, threshold=220)
+
+        self.assertEqual(augmented.size, image.size)
+        self.assertLess(augmented_mask.sum(), baseline_mask.sum())
+
+    def test_circle_patch_dropout_keeps_changes_inside_patch_area(self) -> None:
+        image = MODULE.Image.new("RGB", (32, 32), "white")
+        for y in range(8, 24):
+            for x in range(8, 24):
+                image.putpixel((x, y), (0, 0, 0))
+
+        augmented = MODULE.augment_stroke_patch_dropout(
+            image,
+            rng=MODULE.random.Random(3),
+            patch_count=1,
+            patch_size_min=8,
+            patch_size_max=8,
+            threshold=220,
+            patch_shape="circle",
+        )
+
+        baseline_mask = MODULE.get_stroke_mask(image, threshold=220)
+        augmented_mask = MODULE.get_stroke_mask(augmented, threshold=220)
+        removed_mask = baseline_mask & ~augmented_mask
+
+        self.assertGreater(removed_mask.sum(), 0)
+        self.assertFalse(removed_mask[0:4, 0:4].any())
+
+    def test_augmentation_preset_returns_expected_shape_defaults(self) -> None:
+        light = MODULE.get_augmentation_preset("light")
+        medium = MODULE.get_augmentation_preset("medium")
+        heavy = MODULE.get_augmentation_preset("heavy")
+
+        self.assertEqual(light.patch_shape, "circle")
+        self.assertEqual(medium.patch_shape, "mixed")
+        self.assertEqual(heavy.patch_shape, "mixed")
+        self.assertLess(light.pixel_dropout_ratio_max, heavy.pixel_dropout_ratio_max)
+
 
 if __name__ == "__main__":
     unittest.main()
