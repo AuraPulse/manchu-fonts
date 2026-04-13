@@ -155,6 +155,67 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(medium.patch_shape, "mixed")
         self.assertEqual(heavy.patch_shape, "mixed")
         self.assertLess(light.pixel_dropout_ratio_max, heavy.pixel_dropout_ratio_max)
+        self.assertLess(light.tilt_apply_prob, heavy.tilt_apply_prob)
+        self.assertLess(light.resize_percent_max, heavy.resize_percent_max)
+
+    def test_random_tilt_preserves_canvas_size(self) -> None:
+        image = MODULE.Image.new("RGB", (48, 48), "white")
+        draw = MODULE.ImageDraw.Draw(image)
+        draw.rectangle((20, 8, 28, 40), fill="black")
+        baseline_box = MODULE.ImageOps.invert(image.convert("L")).getbbox()
+
+        augmented = MODULE.augment_random_tilt(
+            image,
+            angle_degrees=3.0,
+            rng=MODULE.random.Random(1),
+        )
+        augmented_box = MODULE.ImageOps.invert(augmented.convert("L")).getbbox()
+
+        self.assertEqual(augmented.size, image.size)
+        self.assertNotEqual(list(augmented.getdata()), list(image.getdata()))
+        self.assertIsNotNone(baseline_box)
+        self.assertIsNotNone(augmented_box)
+        assert baseline_box is not None and augmented_box is not None
+        self.assertGreaterEqual(augmented_box[0], baseline_box[0])
+        self.assertGreaterEqual(augmented_box[1], baseline_box[1])
+        self.assertLessEqual(augmented_box[2], baseline_box[2])
+        self.assertLessEqual(augmented_box[3], baseline_box[3])
+
+    def test_random_resize_preserves_canvas_size(self) -> None:
+        image = MODULE.Image.new("RGB", (64, 32), "white")
+        draw = MODULE.ImageDraw.Draw(image)
+        draw.rectangle((20, 6, 40, 26), fill="black")
+        baseline_box = MODULE.ImageOps.invert(image.convert("L")).getbbox()
+
+        augmented = MODULE.augment_random_resize(
+            image,
+            resize_percent=0.03,
+            rng=MODULE.random.Random(2),
+        )
+        augmented_box = MODULE.ImageOps.invert(augmented.convert("L")).getbbox()
+
+        self.assertEqual(augmented.size, image.size)
+        self.assertNotEqual(list(augmented.getdata()), list(image.getdata()))
+        self.assertIsNotNone(baseline_box)
+        self.assertIsNotNone(augmented_box)
+        assert baseline_box is not None and augmented_box is not None
+        self.assertLessEqual(augmented_box[2] - augmented_box[0], baseline_box[2] - baseline_box[0])
+        self.assertLessEqual(augmented_box[3] - augmented_box[1], baseline_box[3] - baseline_box[1])
+
+    def test_stroke_width_adjustment_preserves_canvas_size(self) -> None:
+        image = MODULE.Image.new("RGB", (48, 48), "white")
+        draw = MODULE.ImageDraw.Draw(image)
+        draw.rectangle((21, 8, 27, 40), fill="black")
+
+        augmented = MODULE.augment_stroke_width(
+            image,
+            rng=MODULE.random.Random(2),
+            width_percent=0.03,
+            threshold=220,
+        )
+
+        self.assertEqual(augmented.size, image.size)
+        self.assertNotEqual(list(augmented.getdata()), list(image.getdata()))
 
 
 if __name__ == "__main__":

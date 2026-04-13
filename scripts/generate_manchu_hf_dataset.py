@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable
 import unicodedata
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 
 ALIAS_RULES: list[tuple[str, str]] = [
@@ -60,6 +60,7 @@ TOKEN_MAP = {
 TOKENS = sorted(TOKEN_MAP.keys(), key=len, reverse=True)
 PROBE_FONT_SIZE = 256
 RESAMPLE_LANCZOS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+RESAMPLE_BICUBIC = Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,15 @@ class DatasetSample:
 class StrokeAugmentationConfig:
     enabled: bool = False
     threshold: int = 220
+    tilt_apply_prob: float = 0.0
+    tilt_degrees_min: float = 1.0
+    tilt_degrees_max: float = 5.0
+    stroke_width_apply_prob: float = 0.0
+    stroke_width_percent_min: float = 0.01
+    stroke_width_percent_max: float = 0.05
+    resize_apply_prob: float = 0.0
+    resize_percent_min: float = 0.01
+    resize_percent_max: float = 0.05
     pixel_dropout_apply_prob: float = 0.0
     pixel_dropout_ratio_min: float = 0.01
     pixel_dropout_ratio_max: float = 0.03
@@ -141,6 +151,15 @@ def get_augmentation_preset(name: str) -> StrokeAugmentationConfig:
         "light": StrokeAugmentationConfig(
             enabled=True,
             threshold=220,
+            tilt_apply_prob=0.2,
+            tilt_degrees_min=1.0,
+            tilt_degrees_max=2.0,
+            stroke_width_apply_prob=0.2,
+            stroke_width_percent_min=0.01,
+            stroke_width_percent_max=0.02,
+            resize_apply_prob=0.2,
+            resize_percent_min=0.01,
+            resize_percent_max=0.02,
             pixel_dropout_apply_prob=0.45,
             pixel_dropout_ratio_min=0.006,
             pixel_dropout_ratio_max=0.018,
@@ -154,6 +173,15 @@ def get_augmentation_preset(name: str) -> StrokeAugmentationConfig:
         "medium": StrokeAugmentationConfig(
             enabled=True,
             threshold=220,
+            tilt_apply_prob=0.4,
+            tilt_degrees_min=1.0,
+            tilt_degrees_max=3.5,
+            stroke_width_apply_prob=0.4,
+            stroke_width_percent_min=0.01,
+            stroke_width_percent_max=0.035,
+            resize_apply_prob=0.4,
+            resize_percent_min=0.01,
+            resize_percent_max=0.035,
             pixel_dropout_apply_prob=0.65,
             pixel_dropout_ratio_min=0.01,
             pixel_dropout_ratio_max=0.03,
@@ -167,6 +195,15 @@ def get_augmentation_preset(name: str) -> StrokeAugmentationConfig:
         "heavy": StrokeAugmentationConfig(
             enabled=True,
             threshold=220,
+            tilt_apply_prob=0.65,
+            tilt_degrees_min=1.0,
+            tilt_degrees_max=5.0,
+            stroke_width_apply_prob=0.65,
+            stroke_width_percent_min=0.01,
+            stroke_width_percent_max=0.05,
+            resize_apply_prob=0.65,
+            resize_percent_min=0.01,
+            resize_percent_max=0.05,
             pixel_dropout_apply_prob=0.9,
             pixel_dropout_ratio_min=0.02,
             pixel_dropout_ratio_max=0.06,
@@ -466,6 +503,93 @@ def augment_stroke_patch_dropout(
     return Image.fromarray(grayscale, mode="L").convert("RGB")
 
 
+def augment_random_tilt(
+    image: Image.Image,
+    angle_degrees: float,
+    rng: random.Random,
+) -> Image.Image:
+    if angle_degrees <= 0:
+        return image
+
+    grayscale = image.convert("L")
+    content_box = ImageOps.invert(grayscale).getbbox()
+    if content_box is None:
+        return image
+
+    content = grayscale.crop(content_box)
+    signed_angle = angle_degrees if rng.random() < 0.5 else -angle_degrees
+    rotated = content.rotate(
+        signed_angle,
+        resample=RESAMPLE_BICUBIC,
+        expand=True,
+        fillcolor=255,
+    )
+    rotated_box = ImageOps.invert(rotated).getbbox()
+    if rotated_box is None:
+        return image
+
+    rotated = rotated.crop(rotated_box)
+    target_width = max(1, content_box[2] - content_box[0])
+    target_height = max(1, content_box[3] - content_box[1])
+    fit_scale = min(target_width / rotated.width, target_height / rotated.height, 1.0)
+    fitted_width = max(1, round(rotated.width * fit_scale))
+    fitted_height = max(1, round(rotated.height * fit_scale))
+    fitted = rotated.resize((fitted_width, fitted_height), RESAMPLE_LANCZOS)
+
+    canvas = Image.new("L", grayscale.size, 255)
+    x_offset = content_box[0] + max(0, (target_width - fitted_width) // 2)
+    y_offset = content_box[1] + max(0, (target_height - fitted_height) // 2)
+    canvas.paste(fitted, (x_offset, y_offset))
+    return canvas.convert("RGB")
+
+
+def augment_stroke_width(
+    image: Image.Image,
+    rng: random.Random,
+    width_percent: float,
+    threshold: int,
+) -> Image.Image:
+    if width_percent <= 0:
+        return image
+
+    grayscale = image.convert("L")
+    filter_factory = ImageFilter.MinFilter if rng.random() < 0.5 else ImageFilter.MaxFilter
+    adjusted = grayscale.filter(filter_factory(3))
+
+    # Blend only a small fraction of the thicker/thinner variant back in.
+    alpha = min(0.5, width_percent / 0.06)
+    adjusted_array = np.asarray(Image.blend(grayscale, adjusted, alpha)).copy()
+    adjusted_array[adjusted_array >= threshold] = 255
+    return Image.fromarray(adjusted_array, mode="L").convert("RGB")
+
+
+def augment_random_resize(
+    image: Image.Image,
+    resize_percent: float,
+    rng: random.Random,
+) -> Image.Image:
+    if resize_percent <= 0:
+        return image
+
+    scale = max(0.01, 1.0 - resize_percent)
+
+    grayscale = image.convert("L")
+    content_box = ImageOps.invert(grayscale).getbbox()
+    if content_box is None:
+        return image
+
+    content = grayscale.crop(content_box)
+    scaled_width = max(1, min(image.width, round(content.width * scale)))
+    scaled_height = max(1, min(image.height, round(content.height * scale)))
+    resized = content.resize((scaled_width, scaled_height), RESAMPLE_LANCZOS)
+
+    canvas = Image.new("L", grayscale.size, 255)
+    x_offset = max(0, min(image.width - scaled_width, content_box[0] + (content.width - scaled_width) // 2))
+    y_offset = max(0, min(image.height - scaled_height, content_box[1] + (content.height - scaled_height) // 2))
+    canvas.paste(resized, (x_offset, y_offset))
+    return canvas.convert("RGB")
+
+
 def apply_stroke_augmentations(
     image: Image.Image,
     config: StrokeAugmentationConfig,
@@ -474,10 +598,22 @@ def apply_stroke_augmentations(
     if not config.enabled:
         return image
 
+    if not 0 <= config.tilt_apply_prob <= 1:
+        raise ValueError("tilt_apply_prob must be in [0, 1].")
+    if not 0 <= config.stroke_width_apply_prob <= 1:
+        raise ValueError("stroke_width_apply_prob must be in [0, 1].")
+    if not 0 <= config.resize_apply_prob <= 1:
+        raise ValueError("resize_apply_prob must be in [0, 1].")
     if not 0 <= config.pixel_dropout_apply_prob <= 1:
         raise ValueError("pixel_dropout_apply_prob must be in [0, 1].")
     if not 0 <= config.patch_dropout_apply_prob <= 1:
         raise ValueError("patch_dropout_apply_prob must be in [0, 1].")
+    if config.tilt_degrees_min > config.tilt_degrees_max:
+        raise ValueError("tilt_degrees_min must be <= tilt_degrees_max.")
+    if config.stroke_width_percent_min > config.stroke_width_percent_max:
+        raise ValueError("stroke_width_percent_min must be <= stroke_width_percent_max.")
+    if config.resize_percent_min > config.resize_percent_max:
+        raise ValueError("resize_percent_min must be <= resize_percent_max.")
     if config.pixel_dropout_ratio_min > config.pixel_dropout_ratio_max:
         raise ValueError("pixel_dropout_ratio_min must be <= pixel_dropout_ratio_max.")
     if config.patch_count_min > config.patch_count_max:
@@ -488,6 +624,19 @@ def apply_stroke_augmentations(
         raise ValueError("patch_shape must be one of: rectangle, circle, mixed.")
 
     augmented = image
+
+    if rng.random() < config.tilt_apply_prob:
+        angle_degrees = rng.uniform(config.tilt_degrees_min, config.tilt_degrees_max)
+        augmented = augment_random_tilt(augmented, angle_degrees=angle_degrees, rng=rng)
+
+    if rng.random() < config.stroke_width_apply_prob:
+        stroke_width_percent = rng.uniform(config.stroke_width_percent_min, config.stroke_width_percent_max)
+        augmented = augment_stroke_width(
+            augmented,
+            rng=rng,
+            width_percent=stroke_width_percent,
+            threshold=config.threshold,
+        )
 
     if rng.random() < config.pixel_dropout_apply_prob:
         drop_ratio = rng.uniform(config.pixel_dropout_ratio_min, config.pixel_dropout_ratio_max)
@@ -509,6 +658,10 @@ def apply_stroke_augmentations(
             threshold=config.threshold,
             patch_shape=config.patch_shape,
         )
+
+    if rng.random() < config.resize_apply_prob:
+        resize_percent = rng.uniform(config.resize_percent_min, config.resize_percent_max)
+        augmented = augment_random_resize(augmented, resize_percent=resize_percent, rng=rng)
 
     return augmented
 
@@ -654,6 +807,15 @@ def write_summary(
         "stroke_augmentation": {
             "enabled": augmentation_config.enabled,
             "threshold": augmentation_config.threshold,
+            "tilt_apply_prob": augmentation_config.tilt_apply_prob,
+            "tilt_degrees_min": augmentation_config.tilt_degrees_min,
+            "tilt_degrees_max": augmentation_config.tilt_degrees_max,
+            "stroke_width_apply_prob": augmentation_config.stroke_width_apply_prob,
+            "stroke_width_percent_min": augmentation_config.stroke_width_percent_min,
+            "stroke_width_percent_max": augmentation_config.stroke_width_percent_max,
+            "resize_apply_prob": augmentation_config.resize_apply_prob,
+            "resize_percent_min": augmentation_config.resize_percent_min,
+            "resize_percent_max": augmentation_config.resize_percent_max,
             "pixel_dropout_apply_prob": augmentation_config.pixel_dropout_apply_prob,
             "pixel_dropout_ratio_min": augmentation_config.pixel_dropout_ratio_min,
             "pixel_dropout_ratio_max": augmentation_config.pixel_dropout_ratio_max,
@@ -874,6 +1036,60 @@ def parse_args() -> argparse.Namespace:
         help="Stroke threshold used to detect foreground pixels for augmentation.",
     )
     parser.add_argument(
+        "--tilt-apply-prob",
+        type=float,
+        default=0.0,
+        help="Probability of applying random tilt to a sample.",
+    )
+    parser.add_argument(
+        "--tilt-degrees-min",
+        type=float,
+        default=1.0,
+        help="Minimum rotation angle in degrees for random tilt.",
+    )
+    parser.add_argument(
+        "--tilt-degrees-max",
+        type=float,
+        default=5.0,
+        help="Maximum rotation angle in degrees for random tilt.",
+    )
+    parser.add_argument(
+        "--stroke-width-apply-prob",
+        type=float,
+        default=0.0,
+        help="Probability of randomly making strokes thinner or thicker.",
+    )
+    parser.add_argument(
+        "--stroke-width-percent-min",
+        type=float,
+        default=0.01,
+        help="Minimum thinner/thicker magnitude, e.g. 0.01 for 1%.",
+    )
+    parser.add_argument(
+        "--stroke-width-percent-max",
+        type=float,
+        default=0.05,
+        help="Maximum thinner/thicker magnitude, e.g. 0.05 for 5%.",
+    )
+    parser.add_argument(
+        "--resize-apply-prob",
+        type=float,
+        default=0.0,
+        help="Probability of randomly resizing the rendered text inside the fixed canvas.",
+    )
+    parser.add_argument(
+        "--resize-percent-min",
+        type=float,
+        default=0.01,
+        help="Minimum resize magnitude, e.g. 0.01 for 1%.",
+    )
+    parser.add_argument(
+        "--resize-percent-max",
+        type=float,
+        default=0.05,
+        help="Maximum resize magnitude, e.g. 0.05 for 5%.",
+    )
+    parser.add_argument(
         "--pixel-dropout-apply-prob",
         type=float,
         default=0.65,
@@ -944,6 +1160,21 @@ def main() -> int:
     augmentation_config = StrokeAugmentationConfig(
         enabled=args.enable_stroke_augmentation or preset_config is not None,
         threshold=preset_config.threshold if preset_config else args.stroke_threshold,
+        tilt_apply_prob=preset_config.tilt_apply_prob if preset_config else args.tilt_apply_prob,
+        tilt_degrees_min=preset_config.tilt_degrees_min if preset_config else args.tilt_degrees_min,
+        tilt_degrees_max=preset_config.tilt_degrees_max if preset_config else args.tilt_degrees_max,
+        stroke_width_apply_prob=(
+            preset_config.stroke_width_apply_prob if preset_config else args.stroke_width_apply_prob
+        ),
+        stroke_width_percent_min=(
+            preset_config.stroke_width_percent_min if preset_config else args.stroke_width_percent_min
+        ),
+        stroke_width_percent_max=(
+            preset_config.stroke_width_percent_max if preset_config else args.stroke_width_percent_max
+        ),
+        resize_apply_prob=preset_config.resize_apply_prob if preset_config else args.resize_apply_prob,
+        resize_percent_min=preset_config.resize_percent_min if preset_config else args.resize_percent_min,
+        resize_percent_max=preset_config.resize_percent_max if preset_config else args.resize_percent_max,
         pixel_dropout_apply_prob=(
             preset_config.pixel_dropout_apply_prob if preset_config else args.pixel_dropout_apply_prob
         ),

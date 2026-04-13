@@ -36,7 +36,13 @@ python3 scripts/generate_manchu_hf_dataset.py \
   --output-dir dataset/hf-ready \
   --canvas-width 480 \
   --canvas-height 64 \
-  --seed 42
+  --seed 42 \
+  --enable-stroke-augmentation \
+  --tilt-apply-prob 0.4 \
+  --tilt-degrees-min 1 \
+  --tilt-degrees-max 5 \
+  --stroke-width-apply-prob 0.4 \
+  --resize-apply-prob 0.4
 ```
 
 输出结构如下：
@@ -55,6 +61,14 @@ dataset/hf-ready/
 ```
 
 `metadata.csv` 的列顺序固定为 `im,roman,manchu`。同时会额外生成 `metadata_hf.csv`，列顺序为 `file_name,roman,manchu`，更适合直接给 Hugging Face `ImageFolder` 使用。默认画布固定为 `480x64`，内容会等比缩放后左对齐放置，并在垂直方向居中。
+
+增强参数除了原有的 `stroke pixel` 和 `stroke patch` 之外，现在也支持：
+
+- `random tilt`：`--tilt-apply-prob`、`--tilt-degrees-min`、`--tilt-degrees-max`
+- `thinner / thicker`：`--stroke-width-apply-prob`、`--stroke-width-percent-min`、`--stroke-width-percent-max`
+- `resize`：`--resize-apply-prob`、`--resize-percent-min`、`--resize-percent-max`
+
+其中 `random tilt` 现在是真正旋转，且会约束在原有 padding 安全区内，推荐范围是 `±1° ~ ±5°`。`resize` 现在只会把字缩小 `1% ~ 5%`；`thinner / thicker` 仍然按 `±1% ~ ±5%` 的微扰动处理。
 
 ## GitHub Pages
 
