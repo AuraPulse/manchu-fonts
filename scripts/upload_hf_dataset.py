@@ -74,13 +74,12 @@ def validate_dataset_dir(dataset_dir: Path) -> None:
     if not dataset_dir.is_dir():
         raise NotADirectoryError(f"Dataset path is not a directory: {dataset_dir}")
 
-    if detect_dataset_layout(dataset_dir) == "image":
-        return
-    if detect_dataset_layout(dataset_dir) == "arrow":
+    layout = detect_dataset_layout(dataset_dir)
+    if layout in {"image", "arrow", "parquet"}:
         return
     raise FileNotFoundError(
-        "Dataset directory is neither a generated image dataset nor a Hugging Face Arrow dataset saved with "
-        "datasets.save_to_disk()."
+        "Dataset directory is neither a generated image dataset, a Hugging Face Arrow dataset saved with "
+        "datasets.save_to_disk(), nor a Viewer-friendly Parquet dataset."
     )
 
 
@@ -100,6 +99,10 @@ def detect_dataset_layout(dataset_dir: Path) -> str:
     ]
     if all(path.exists() for path in arrow_expected_paths):
         return "arrow"
+
+    parquet_files = list(dataset_dir.glob("*.parquet"))
+    if parquet_files and any("train-" in path.name for path in parquet_files):
+        return "parquet"
 
     return "unknown"
 
@@ -216,6 +219,31 @@ def upload_root_files(
     return uploaded_parts
 
 
+def upload_parquet_split_files(
+    *,
+    api,
+    dataset_dir: Path,
+    repo_id: str,
+    revision: str,
+    path_in_repo: str,
+    commit_message: str,
+    split_name: str,
+) -> list[str]:
+    uploaded_parts: list[str] = []
+    split_files = sorted(dataset_dir.glob(f"{split_name}-*.parquet"))
+    for split_file in split_files:
+        commit_id = upload_file(
+            api=api,
+            local_file=split_file,
+            repo_id=repo_id,
+            revision=revision,
+            repo_path=join_repo_path(path_in_repo, split_file.name),
+            commit_message=f"{commit_message} ({split_file.name})",
+        )
+        uploaded_parts.append(f"{split_file.name}:{commit_id}")
+    return uploaded_parts
+
+
 def main() -> int:
     from huggingface_hub import HfApi
 
@@ -279,21 +307,47 @@ def main() -> int:
                 include_files=["dataset_dict.json", "state.json", "dataset_info.json"],
             )
         )
-
-    for split_name in ("train", "validation"):
-        split_dir = dataset_dir / split_name
-        split_mode = upload_folder_maybe_large(
-            api=api,
-            local_dir=split_dir,
-            repo_id=args.repo_id,
-            revision=args.revision,
-            repo_private=args.repo_private,
-            repo_path=join_repo_path(args.path_in_repo, split_name),
-            exclude=args.exclude,
-            mode=args.mode,
-            commit_message=f"{args.commit_message} ({split_name})",
+    elif layout == "parquet":
+        uploaded_parts.extend(
+            upload_root_files(
+                api=api,
+                dataset_dir=dataset_dir,
+                repo_id=args.repo_id,
+                revision=args.revision,
+                path_in_repo=args.path_in_repo,
+                commit_message=args.commit_message,
+                include_files=["README.md"],
+            )
         )
-        uploaded_parts.append(f"{split_name}:{split_mode}")
+
+    if layout == "parquet":
+        for split_name in ("train", "validation"):
+            uploaded_parts.extend(
+                upload_parquet_split_files(
+                    api=api,
+                    dataset_dir=dataset_dir,
+                    repo_id=args.repo_id,
+                    revision=args.revision,
+                    path_in_repo=args.path_in_repo,
+                    commit_message=args.commit_message,
+                    split_name=split_name,
+                )
+            )
+    else:
+        for split_name in ("train", "validation"):
+            split_dir = dataset_dir / split_name
+            split_mode = upload_folder_maybe_large(
+                api=api,
+                local_dir=split_dir,
+                repo_id=args.repo_id,
+                revision=args.revision,
+                repo_private=args.repo_private,
+                repo_path=join_repo_path(args.path_in_repo, split_name),
+                exclude=args.exclude,
+                mode=args.mode,
+                commit_message=f"{args.commit_message} ({split_name})",
+            )
+            uploaded_parts.append(f"{split_name}:{split_mode}")
 
     print(f"Uploaded dataset from: {dataset_dir}")
     print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
