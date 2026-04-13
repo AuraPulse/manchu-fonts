@@ -74,17 +74,34 @@ def validate_dataset_dir(dataset_dir: Path) -> None:
     if not dataset_dir.is_dir():
         raise NotADirectoryError(f"Dataset path is not a directory: {dataset_dir}")
 
-    expected_paths = [
+    if detect_dataset_layout(dataset_dir) == "image":
+        return
+    if detect_dataset_layout(dataset_dir) == "arrow":
+        return
+    raise FileNotFoundError(
+        "Dataset directory is neither a generated image dataset nor a Hugging Face Arrow dataset saved with "
+        "datasets.save_to_disk()."
+    )
+
+
+def detect_dataset_layout(dataset_dir: Path) -> str:
+    image_expected_paths = [
         dataset_dir / "train" / "metadata.csv",
         dataset_dir / "validation" / "metadata.csv",
         dataset_dir / "summary.json",
     ]
-    missing = [str(path) for path in expected_paths if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Dataset directory does not look complete. Missing expected files:\n"
-            + "\n".join(missing)
-        )
+    if all(path.exists() for path in image_expected_paths):
+        return "image"
+
+    arrow_expected_paths = [
+        dataset_dir / "dataset_dict.json",
+        dataset_dir / "train",
+        dataset_dir / "validation",
+    ]
+    if all(path.exists() for path in arrow_expected_paths):
+        return "arrow"
+
+    return "unknown"
 
 
 def join_repo_path(base: str, child: str) -> str:
@@ -172,12 +189,40 @@ def upload_file(
     return result.oid
 
 
+def upload_root_files(
+    *,
+    api,
+    dataset_dir: Path,
+    repo_id: str,
+    revision: str,
+    path_in_repo: str,
+    commit_message: str,
+    include_files: list[str],
+) -> list[str]:
+    uploaded_parts: list[str] = []
+    for file_name in include_files:
+        local_file = dataset_dir / file_name
+        if not local_file.exists():
+            continue
+        commit_id = upload_file(
+            api=api,
+            local_file=local_file,
+            repo_id=repo_id,
+            revision=revision,
+            repo_path=join_repo_path(path_in_repo, file_name),
+            commit_message=f"{commit_message} ({file_name})",
+        )
+        uploaded_parts.append(f"{file_name}:{commit_id}")
+    return uploaded_parts
+
+
 def main() -> int:
     from huggingface_hub import HfApi
 
     args = parse_args()
     dataset_dir = Path(args.dataset_dir).resolve()
     validate_dataset_dir(dataset_dir)
+    layout = detect_dataset_layout(dataset_dir)
 
     if not args.token:
         raise ValueError("Missing Hugging Face token. Pass --token or set HF_TOKEN.")
@@ -205,32 +250,35 @@ def main() -> int:
         print(f"Uploaded dataset from: {dataset_dir}")
         print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
         print(f"Upload mode: {mode_used}")
+        print(f"Detected layout: {layout}")
         return 0
 
     uploaded_parts: list[str] = []
 
-    summary_path = dataset_dir / "summary.json"
-    summary_commit = upload_file(
-        api=api,
-        local_file=summary_path,
-        repo_id=args.repo_id,
-        revision=args.revision,
-        repo_path=join_repo_path(args.path_in_repo, "summary.json"),
-        commit_message=f"{args.commit_message} (summary)",
-    )
-    uploaded_parts.append(f"summary.json:{summary_commit}")
-
-    invalid_rows_path = dataset_dir / "invalid_rows.csv"
-    if invalid_rows_path.exists():
-        invalid_commit = upload_file(
-            api=api,
-            local_file=invalid_rows_path,
-            repo_id=args.repo_id,
-            revision=args.revision,
-            repo_path=join_repo_path(args.path_in_repo, "invalid_rows.csv"),
-            commit_message=f"{args.commit_message} (invalid rows)",
+    if layout == "image":
+        uploaded_parts.extend(
+            upload_root_files(
+                api=api,
+                dataset_dir=dataset_dir,
+                repo_id=args.repo_id,
+                revision=args.revision,
+                path_in_repo=args.path_in_repo,
+                commit_message=args.commit_message,
+                include_files=["summary.json", "invalid_rows.csv"],
+            )
         )
-        uploaded_parts.append(f"invalid_rows.csv:{invalid_commit}")
+    elif layout == "arrow":
+        uploaded_parts.extend(
+            upload_root_files(
+                api=api,
+                dataset_dir=dataset_dir,
+                repo_id=args.repo_id,
+                revision=args.revision,
+                path_in_repo=args.path_in_repo,
+                commit_message=args.commit_message,
+                include_files=["dataset_dict.json", "state.json", "dataset_info.json"],
+            )
+        )
 
     for split_name in ("train", "validation"):
         split_dir = dataset_dir / split_name
@@ -250,6 +298,7 @@ def main() -> int:
     print(f"Uploaded dataset from: {dataset_dir}")
     print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
     print("Upload strategy: split")
+    print(f"Detected layout: {layout}")
     for part in uploaded_parts:
         print(f"Part: {part}")
     return 0
