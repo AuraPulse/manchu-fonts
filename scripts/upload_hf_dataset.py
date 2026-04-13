@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 from pathlib import Path
 
@@ -101,19 +102,35 @@ def main() -> int:
     use_large_upload = args.mode == "large" or (args.mode == "auto" and callable(upload_large_folder))
 
     if use_large_upload:
-        upload_large_folder(
-            repo_id=args.repo_id,
-            repo_type="dataset",
-            folder_path=str(dataset_dir),
-            path_in_repo=args.path_in_repo,
-            revision=args.revision,
-            private=args.repo_private,
-            ignore_patterns=args.exclude,
-        )
-        print(f"Uploaded dataset from: {dataset_dir}")
-        print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
-        print("Upload mode: upload_large_folder")
-        return 0
+        supported_params = set(inspect.signature(upload_large_folder).parameters)
+        large_kwargs = {
+            "repo_id": args.repo_id,
+            "repo_type": "dataset",
+            "folder_path": str(dataset_dir),
+            "revision": args.revision,
+            "private": args.repo_private,
+            "ignore_patterns": args.exclude,
+        }
+
+        if "path_in_repo" in supported_params:
+            large_kwargs["path_in_repo"] = args.path_in_repo
+        elif args.path_in_repo not in {".", ""}:
+            if args.mode == "large":
+                raise ValueError(
+                    "This version of huggingface_hub does not support --path-in-repo with "
+                    "upload_large_folder(). Upgrade huggingface_hub or use --mode regular."
+                )
+            use_large_upload = False
+
+        if use_large_upload:
+            filtered_large_kwargs = {
+                key: value for key, value in large_kwargs.items() if key in supported_params
+            }
+            upload_large_folder(**filtered_large_kwargs)
+            print(f"Uploaded dataset from: {dataset_dir}")
+            print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
+            print("Upload mode: upload_large_folder")
+            return 0
 
     result = api.upload_folder(
         repo_id=args.repo_id,
