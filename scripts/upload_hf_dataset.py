@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=["auto", "large", "regular"],
-        default="auto",
-        help="Upload mode. 'auto' prefers upload_large_folder when available.",
+        default="regular",
+        help="Upload mode. 'regular' is the safest default. 'auto' prefers upload_large_folder when available.",
     )
     return parser.parse_args()
 

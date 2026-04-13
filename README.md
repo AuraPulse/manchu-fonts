@@ -80,7 +80,7 @@ python3 scripts/upload_hf_dataset.py \
   --repo-id your-name/manchu-hf-all-augmented
 ```
 
-这个脚本默认会优先使用 `upload_large_folder(...)` 上传大目录；如果你本机的 `huggingface_hub` 版本较旧、不支持这个接口，则会自动回退到 `upload_folder(...)`。
+这个脚本默认使用更保守的 `upload_folder(...)`。如果你确认目标环境扛得住，再显式传 `--mode auto` 或 `--mode large` 使用 `upload_large_folder(...)`。
 
 ## GitHub Pages
 
