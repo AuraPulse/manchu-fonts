@@ -6,9 +6,6 @@ import argparse
 import os
 from pathlib import Path
 
-from huggingface_hub import HfApi
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upload a generated Manchu dataset folder to a Hugging Face dataset repository."
@@ -54,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         default=[".DS_Store", "**/.DS_Store"],
         help="Optional glob patterns to exclude from upload.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "large", "regular"],
+        default="auto",
+        help="Upload mode. 'auto' prefers upload_large_folder when available.",
+    )
     return parser.parse_args()
 
 
@@ -77,6 +80,8 @@ def validate_dataset_dir(dataset_dir: Path) -> None:
 
 
 def main() -> int:
+    from huggingface_hub import HfApi
+
     args = parse_args()
     dataset_dir = Path(args.dataset_dir).resolve()
     validate_dataset_dir(dataset_dir)
@@ -92,6 +97,24 @@ def main() -> int:
         exist_ok=True,
     )
 
+    upload_large_folder = getattr(api, "upload_large_folder", None)
+    use_large_upload = args.mode == "large" or (args.mode == "auto" and callable(upload_large_folder))
+
+    if use_large_upload:
+        upload_large_folder(
+            repo_id=args.repo_id,
+            repo_type="dataset",
+            folder_path=str(dataset_dir),
+            path_in_repo=args.path_in_repo,
+            revision=args.revision,
+            private=args.repo_private,
+            ignore_patterns=args.exclude,
+        )
+        print(f"Uploaded dataset from: {dataset_dir}")
+        print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
+        print("Upload mode: upload_large_folder")
+        return 0
+
     result = api.upload_folder(
         repo_id=args.repo_id,
         repo_type="dataset",
@@ -104,6 +127,7 @@ def main() -> int:
 
     print(f"Uploaded dataset from: {dataset_dir}")
     print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
+    print("Upload mode: upload_folder")
     print(f"Commit: {result.oid}")
     return 0
 

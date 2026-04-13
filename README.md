@@ -80,6 +80,8 @@ python3 scripts/upload_hf_dataset.py \
   --repo-id your-name/manchu-hf-all-augmented
 ```
 
+这个脚本默认会优先使用 `upload_large_folder(...)` 上传大目录；如果你本机的 `huggingface_hub` 版本较旧、不支持这个接口，则会自动回退到 `upload_folder(...)`。
+
 ## GitHub Pages
 
 这个仓库使用 GitHub Actions 部署到 GitHub Pages。
