@@ -70,6 +70,16 @@ dataset/hf-ready/
 
 其中 `random tilt` 现在是真正旋转，且会约束在原有 padding 安全区内，推荐范围是 `±1° ~ ±5°`。`resize` 现在只会把字缩小 `1% ~ 5%`；`thinner / thicker` 仍然按 `±1% ~ ±5%` 的微扰动处理。
 
+如果你要把生成好的数据集上传到 Hugging Face Dataset repo，可以使用：
+
+```bash
+pip install huggingface_hub
+export HF_TOKEN=hf_xxx
+python3 scripts/upload_hf_dataset.py \
+  --dataset-dir dataset/hf-all-augmented \
+  --repo-id your-name/manchu-hf-all-augmented
+```
+
 ## GitHub Pages
 
 这个仓库使用 GitHub Actions 部署到 GitHub Pages。

@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+from huggingface_hub import HfApi
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Upload a generated Manchu dataset folder to a Hugging Face dataset repository."
+    )
+    parser.add_argument(
+        "--dataset-dir",
+        required=True,
+        help="Local dataset directory to upload, e.g. dataset/hf-all-augmented.",
+    )
+    parser.add_argument(
+        "--repo-id",
+        required=True,
+        help="Hugging Face dataset repo id, e.g. your-name/manchu-hf-all-augmented.",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN"),
+        help="Hugging Face token. Defaults to HF_TOKEN or HUGGINGFACE_TOKEN.",
+    )
+    parser.add_argument(
+        "--repo-private",
+        action="store_true",
+        help="Create the dataset repo as private if it does not already exist.",
+    )
+    parser.add_argument(
+        "--revision",
+        default="main",
+        help="Branch to upload to. Defaults to main.",
+    )
+    parser.add_argument(
+        "--commit-message",
+        default="Upload Manchu dataset",
+        help="Commit message used for the upload.",
+    )
+    parser.add_argument(
+        "--path-in-repo",
+        default=".",
+        help="Target path inside the repo. Defaults to repository root.",
+    )
+    parser.add_argument(
+        "--exclude",
+        nargs="*",
+        default=[".DS_Store", "**/.DS_Store"],
+        help="Optional glob patterns to exclude from upload.",
+    )
+    return parser.parse_args()
+
+
+def validate_dataset_dir(dataset_dir: Path) -> None:
+    if not dataset_dir.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+    if not dataset_dir.is_dir():
+        raise NotADirectoryError(f"Dataset path is not a directory: {dataset_dir}")
+
+    expected_paths = [
+        dataset_dir / "train" / "metadata.csv",
+        dataset_dir / "validation" / "metadata.csv",
+        dataset_dir / "summary.json",
+    ]
+    missing = [str(path) for path in expected_paths if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Dataset directory does not look complete. Missing expected files:\n"
+            + "\n".join(missing)
+        )
+
+
+def main() -> int:
+    args = parse_args()
+    dataset_dir = Path(args.dataset_dir).resolve()
+    validate_dataset_dir(dataset_dir)
+
+    if not args.token:
+        raise ValueError("Missing Hugging Face token. Pass --token or set HF_TOKEN.")
+
+    api = HfApi(token=args.token)
+    api.create_repo(
+        repo_id=args.repo_id,
+        repo_type="dataset",
+        private=args.repo_private,
+        exist_ok=True,
+    )
+
+    result = api.upload_folder(
+        repo_id=args.repo_id,
+        repo_type="dataset",
+        folder_path=str(dataset_dir),
+        path_in_repo=args.path_in_repo,
+        revision=args.revision,
+        commit_message=args.commit_message,
+        ignore_patterns=args.exclude,
+    )
+
+    print(f"Uploaded dataset from: {dataset_dir}")
+    print(f"Repo: https://huggingface.co/datasets/{args.repo_id}")
+    print(f"Commit: {result.oid}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
