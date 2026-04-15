@@ -58,14 +58,12 @@ def load_split_examples(dataset_dir: Path, split_name: str) -> list[dict[str, ob
 
             examples.append(
                 {
-                    "image": {
+                    "im": {
                         "bytes": image_path.read_bytes(),
                         "path": relative_image_path,
                     },
-                    "file_name": relative_image_path,
                     "roman": row["roman"],
                     "manchu": row["manchu"],
-                    "font_id": Path(relative_image_path).parent.name,
                 }
             )
 
@@ -82,11 +80,9 @@ def main() -> int:
 
     features = Features(
         {
-            "image": Image(),
-            "file_name": Value("string"),
+            "im": Image(),
             "roman": Value("string"),
             "manchu": Value("string"),
-            "font_id": Value("string"),
         }
     )
 

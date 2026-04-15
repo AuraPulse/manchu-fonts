@@ -80,7 +80,46 @@ python3 scripts/upload_hf_dataset.py \
   --repo-id your-name/manchu-hf-all-augmented
 ```
 
-这个脚本默认使用更保守的 `upload_folder(...)`。如果你确认目标环境扛得住，再显式传 `--mode auto` 或 `--mode large` 使用 `upload_large_folder(...)`。
+这个脚本默认采用分批上传：
+
+- 先传 `summary.json`
+- 再传 `invalid_rows.csv`（如果存在）
+- 再分别传 `train/` 和 `validation/`
+
+默认也使用更保守的 `upload_folder(...)`。如果你确认目标环境扛得住，再显式传 `--mode auto` 或 `--mode large` 使用 `upload_large_folder(...)`。如果你确实想整包上传，可以再加 `--batch all`。
+
+如果你想先把图片数据集打包成 Hugging Face Arrow 再上传，可以使用：
+
+```bash
+pip install datasets pyarrow
+python3 scripts/convert_dataset_to_hf_arrow.py \
+  --dataset-dir output-manchu \
+  --output-dir output-manchu-arrow
+```
+
+这样会把图片字节直接写进 Arrow shard，列会保留为 `im, roman, manchu`，上传时也不再是海量小文件。
+
+转换完成后，可以直接用同一个上传脚本上传 Arrow 目录：
+
+```bash
+python3 scripts/upload_hf_dataset.py \
+  --dataset-dir output-manchu-arrow \
+  --repo-id your-name/manchu-augmented-arrow
+```
+
+如果你想让 Hugging Face Dataset Viewer 直接可预览，更推荐先转换成 Parquet，列也会保留为 `im, roman, manchu`：
+
+```bash
+pip install datasets pyarrow huggingface_hub
+python3 scripts/convert_dataset_to_hf_parquet.py \
+  --dataset-dir output-manchu \
+  --output-dir output-manchu-parquet \
+  --rows-per-shard 5000
+
+python3 scripts/upload_hf_dataset.py \
+  --dataset-dir output-manchu-parquet \
+  --repo-id your-name/manchu-augmented-parquet
+```
 
 ## GitHub Pages
 
